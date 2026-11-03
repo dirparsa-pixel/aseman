@@ -1,0 +1,5 @@
+﻿<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns="http://www.w3.org/TR/REC-html40" dir="rtl"><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><style>
+    table{border-collapse:collapse;direction:rtl;font-family:Tahoma,sans-serif;font-size:13px}
+    th{background:#16336f;color:#ffffff;border:1px solid #999;padding:8px;font-weight:bold;text-align:center}
+    td{border:1px solid #bbb;padding:6px;text-align:right;mso-number-format:"\@"}
+    </style></head><body><table border="1"><thead><tr><th>نام و نام خانوادگی</th><th>شماره تماس</th><th>کد عضویت</th></tr></thead><tbody><tr><td>علی رضایی</td><td>09120000000</td><td>1001</td></tr></tbody></table></body></html>
