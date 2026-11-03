@@ -156,10 +156,10 @@ function render_portal_box($bx) {
             }
         echo '</ul></div>
             <div class="card"><h2>تازه‌های کتابخانه</h2><ul class="list-clean">';
-            foreach ($db->query("SELECT r.f200a, r.f700, (SELECT STRING_AGG(DISTINCT loc, '، ') FROM items WHERE rid=r.id) AS loc FROM records r ORDER BY r.id DESC LIMIT 5") as $nb) {
-                echo '<li><span><b>' . h($nb['f200a']) . '</b> (' . h($nb['f700']) . ')</span><span class="badge">' . h($nb['loc']) . '</span></li>';
+            foreach ($db->query("SELECT r.id, r.f200a, r.f700, (SELECT GROUP_CONCAT(DISTINCT loc) FROM items WHERE rid=r.id) AS loc FROM records r ORDER BY r.id DESC LIMIT 5") as $nb) {
+                echo '<li style="cursor:pointer" title="مشاهده مشخصات منبع در OPAC" onclick="location.href=\'?p=res&id=' . (int)$nb['id'] . '\'"><span><b>' . h($nb['f200a']) . '</b> (' . h($nb['f700']) . ')</span><span class="badge">' . h(str_replace(',', '، ', $nb['loc'])) . '</span></li>';
             }
-        echo '</ul></div></div>';
+        echo '</ul><p style="font-size:11.5px;margin:8px 0 0;opacity:.75">برای مشاهده مشخصات کامل هر منبع، روی آن کلیک کنید.</p></div></div>';
 
     } elseif ($bkey === 'about_contact') {
         echo '<div class="grid">
@@ -244,17 +244,13 @@ function render_portal_box($bx) {
             'types'    => 'انواع منابع'
         );
         $first_t = $tabs_cfg[0];
-        echo '<div class="card"><h2>' . h($btitle) . '</h2>';
-        if (count($tabs_cfg) > 1) {
-            echo '<div class="tabs" style="margin-bottom:10px;display:grid;grid-template-columns:repeat(' . count($tabs_cfg) . ',1fr);gap:4px">';
-            foreach ($tabs_cfg as $tk) {
-                if (!isset($tab_labels[$tk])) continue;
-                echo '<a id="st_tb_btn_' . $tk . '" class="' . ($tk === $first_t ? 'on' : '') . '" href="javascript:void(0)" onclick="swPortalStatsTab(\'' . $tk . '\')" style="padding:5px 4px;font-size:11.5px">' . h($tab_labels[$tk]) . '</a>';
-            }
-            echo '</div>';
-        }
+        $sb_style = get_cms('stats_box_style') ?: 'tabs';
+        if (!in_array($sb_style, array('tabs', 'tiles', 'minimal', 'dark'))) $sb_style = 'tabs';
+
+        // پانل‌های جزئیات (مشترک بین شیوه‌ها)
+        $panes_html = '';
         if (in_array('overview', $tabs_cfg)) {
-            echo '<div id="st_tb_pane_overview" style="' . ($first_t === 'overview' ? '' : 'display:none') . '"><ul class="list-clean">
+            $panes_html .= '<div id="st_tb_pane_overview" style="' . ($first_t === 'overview' ? '' : 'display:none') . '"><ul class="list-clean">
                 <li><span>کل عناوین منابع:</span><b>' . tr_num($n_rec[0]) . ' عنوان</b></li>
                 <li><span>مجموع نسخه‌های موجود:</span><b>' . tr_num($n_rec[1]) . ' نسخه</b></li>
                 <li><span>اعضای فعال کتابخانه:</span><b>' . tr_num($n_mem) . ' نفر</b></li>
@@ -263,20 +259,72 @@ function render_portal_box($bx) {
             </ul></div>';
         }
         if (in_array('locs', $tabs_cfg)) {
-            echo '<div id="st_tb_pane_locs" style="' . ($first_t === 'locs' ? '' : 'display:none') . '"><ul class="list-clean">';
+            $panes_html .= '<div id="st_tb_pane_locs" style="' . ($first_t === 'locs' ? '' : 'display:none') . '"><ul class="list-clean">';
             foreach ($db->query("SELECT loc, COUNT(DISTINCT rid) AS c1, COUNT(*) AS c2 FROM items GROUP BY loc ORDER BY c2 DESC") as $lr) {
-                echo '<li><span><b>' . h($lr['loc']) . '</b></span><span>' . tr_num($lr['c1']) . ' عنوان (' . tr_num($lr['c2']) . ' جلد)</span></li>';
+                $panes_html .= '<li><span><b>' . h($lr['loc']) . '</b></span><span>' . tr_num($lr['c1']) . ' عنوان (' . tr_num($lr['c2']) . ' جلد)</span></li>';
             }
-            echo '</ul></div>';
+            $panes_html .= '</ul></div>';
         }
         if (in_array('types', $tabs_cfg)) {
-            echo '<div id="st_tb_pane_types" style="' . ($first_t === 'types' ? '' : 'display:none') . '"><ul class="list-clean">';
+            $panes_html .= '<div id="st_tb_pane_types" style="' . ($first_t === 'types' ? '' : 'display:none') . '"><ul class="list-clean">';
             foreach ($RTypes as $k => $v) {
                 $c = $db->prepare("SELECT COUNT(*) FROM records WHERE rtype=?"); $c->execute(array($k));
-                echo '<li><span>تعداد ' . h($v) . ':</span><b>' . tr_num($c->fetchColumn()) . ' عنوان</b></li>';
+                $panes_html .= '<li><span>تعداد ' . h($v) . ':</span><b>' . tr_num($c->fetchColumn()) . ' عنوان</b></li>';
             }
-            echo '</ul></div>';
+            $panes_html .= '</ul></div>';
         }
+
+        $detail_tabs_html = '';
+        if (count($tabs_cfg) > 1) {
+            $detail_tabs_html .= '<div class="tabs" style="margin-bottom:10px;display:grid;grid-template-columns:repeat(' . count($tabs_cfg) . ',1fr);gap:4px">';
+            foreach ($tabs_cfg as $tk) {
+                if (!isset($tab_labels[$tk])) continue;
+                $detail_tabs_html .= '<a id="st_tb_btn_' . $tk . '" class="' . ($tk === $first_t ? 'on' : '') . '" href="javascript:void(0)" onclick="swPortalStatsTab(\'' . $tk . '\')" style="padding:5px 4px;font-size:11.5px">' . h($tab_labels[$tk]) . '</a>';
+            }
+            $detail_tabs_html .= '</div>';
+        } else {
+            // تک‌تب: بدون دکمه، فقط خود پانل نمایش داده می‌شود
+            $detail_tabs_html = '';
+        }
+
+        if ($sb_style === 'minimal') {
+            echo '<div class="card stats-minimal"><h2>' . h($btitle) . '</h2>
+                <div class="sm-inline">
+                    <span><b>' . tr_num($n_rec[0]) . '</b> عنوان</span><i>|</i>
+                    <span><b>' . tr_num($n_rec[1]) . '</b> نسخه</span><i>|</i>
+                    <span><b>' . tr_num($n_mem) . '</b> عضو فعال</span><i>|</i>
+                    <span><b>' . tr_num($n_loan_act) . '</b> امانت در گردش</span><i>|</i>
+                    <span><b>' . tr_num($n_loan_all) . '</b> کل گردش امانات</span>
+                </div>';
+            if (count($tabs_cfg) > 1 || !in_array('overview', $tabs_cfg)) {
+                echo $detail_tabs_html . $panes_html;
+            }
+            echo '</div>';
+        } elseif ($sb_style === 'dark') {
+            echo '<div class="card stats-dark"><h2>' . h($btitle) . '</h2>
+                <div class="sd-row">
+                    <div class="sd-item"><b>' . tr_num($n_rec[0]) . '</b><span>عنوان منبع</span></div>
+                    <div class="sd-item"><b>' . tr_num($n_rec[1]) . '</b><span>نسخه / جلد</span></div>
+                    <div class="sd-item"><b>' . tr_num($n_mem) . '</b><span>عضو فعال</span></div>
+                    <div class="sd-item"><b>' . tr_num($n_loan_act) . '</b><span>در گردش</span></div>
+                </div>';
+            echo $detail_tabs_html . $panes_html;
+            echo '</div>';
+        } elseif ($sb_style === 'tiles') {
+            echo '<div class="card"><h2>' . h($btitle) . '</h2>
+                <div class="stat-tiles">
+                    <div class="st-tile t1"><b>' . tr_num($n_rec[0]) . '</b><span>کل عناوین منابع</span></div>
+                    <div class="st-tile t2"><b>' . tr_num($n_rec[1]) . '</b><span>مجموع نسخه‌ها</span></div>
+                    <div class="st-tile t3"><b>' . tr_num($n_mem) . '</b><span>اعضای فعال</span></div>
+                    <div class="st-tile t4"><b>' . tr_num($n_loan_act) . '</b><span>امانت در گردش</span></div>
+                    <div class="st-tile t5"><b>' . tr_num($n_loan_all) . '</b><span>کل گردش امانات</span></div>
+                </div>';
+            echo $detail_tabs_html . $panes_html;
+            echo '</div>';
+        } else { // tabs — حالت پیش‌فرض قبلی
+            echo '<div class="card"><h2>' . h($btitle) . '</h2>' . $detail_tabs_html . $panes_html . '</div>';
+        }
+
         echo '<script>
         function swPortalStatsTab(k){
             ["overview","locs","types"].forEach(function(x){
@@ -285,7 +333,7 @@ function render_portal_box($bx) {
                 if(b) b.className = (x===k)?"on":"";
             });
         }
-        </script></div>';
+        </script>';
 
     } elseif ($bkey === 'gallery') {
         $gals = $db->query("SELECT * FROM gallery ORDER BY id DESC LIMIT 12")->fetchAll(PDO::FETCH_ASSOC);

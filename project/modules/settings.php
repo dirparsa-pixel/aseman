@@ -347,7 +347,7 @@ if ($p === 'settings') {
     if (!empty($_SESSION['flash'])) { echo '<div class="ok-msg">' . h($_SESSION['flash']) . '</div>'; unset($_SESSION['flash']); }
     echo '<div class="tabs">
         <a class="' . ($box === 'general' ? 'on' : '') . '" href="?p=cms&box=general">تغییر تم پرتال و طیف رنگ</a>
-        <a class="' . ($box === 'slider' ? 'on' : '') . '" href="?p=cms&box=slider">اسلایدر عریض (۳ اسلاید)</a>
+        <a class="' . ($box === 'slider' ? 'on' : '') . '" href="?p=cms&box=slider">اسلایدر عریض (تعداد دلخواه + مات/شفاف)</a>
         <a class="' . ($box === 'hdr_ftr' ? 'on' : '') . '" href="?p=cms&box=hdr_ftr">تنظیمات هدر، لوگو و ستون‌های فوتر</a>
         <a class="' . ($box === 'menus' ? 'on' : '') . '" href="?p=cms&box=menus">منوی فوتر و منوی آبشاری</a>
         <a class="' . ($box === 'pages' ? 'on' : '') . '" href="?p=cms&box=pages">ساخت صفحه تکی (لینک یکتا)</a>
@@ -462,7 +462,14 @@ if ($p === 'settings') {
 
     } elseif ($box === 'layout') {
         $cur_st_tabs = explode(',', get_cms('stats_tabs_cfg') ?: 'overview,locs,types');
-        echo '<div class="card" style="border:2px solid var(--blue)"><h2>تنظیمات باکس مشاهده آمار تب‌بندی‌شده (خودکار از آمار سامانه)</h2>
+        $cur_sb_style = get_cms('stats_box_style') ?: 'tabs';
+        $sb_styles = array(
+            'tabs'    => 'تب‌بندی (حالت فعلی — سرصفحه + تب‌های متنی)',
+            'tiles'   => 'کاشی رنگی بزرگ (آمار کلی به‌صورت کارت‌های عددی چشمگیر + جزئیات در تب)',
+            'minimal' => 'حداقلی / اینلاین (اعداد مهم در یک خط با جداکننده)',
+            'dark'    => 'تیره سازمانی (پس‌زمینه سرمه‌ای با اعداد طلایی، مناسب هدر/فوتر)'
+        );
+        echo '<div class="card" style="border:2px solid var(--blue)"><h2>تنظیمات باکس مشاهده آمار تب‌بندی‌شده (خودکار از آمار پایگاه)</h2>
             <form method="post" action="?p=savecms">
                 <input type="hidden" name="t" value="' . $tok . '"><input type="hidden" name="active_box" value="layout">
                 <p style="font-size:12.8px;margin:0 0 10px">تعیین کنید کدام تب‌های آماری به صورت زنده و خودکار از آمار سامانه در باکس آمار صفحه اصلی پرتال نمایش داده شوند:</p>
@@ -471,7 +478,16 @@ if ($p === 'settings') {
                     <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="stats_tabs_arr[]" value="locs"' . (in_array('locs', $cur_st_tabs) ? ' checked' : '') . '> تب آمار موجودی به تفکیک هر کتابخانه</label>
                     <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" name="stats_tabs_arr[]" value="types"' . (in_array('types', $cur_st_tabs) ? ' checked' : '') . '> تب آمار به تفکیک نوع منبع (کتاب، مقاله، پایان‌نامه)</label>
                 </div>
-                <button class="btn ok">ذخیره تنظیمات تب‌های باکس آمار</button>
+                <div style="margin:14px 0 12px">
+                    <label>شیوه نمایش باکس آمار در صفحه اصلی پرتال:</label>
+                    <select name="stats_box_style" style="min-width:320px">';
+                    foreach ($sb_styles as $ssk => $ssv) {
+                        echo '<option value="' . h($ssk) . '"' . ($cur_sb_style === $ssk ? ' selected' : '') . '>' . h($ssv) . '</option>';
+                    }
+        echo '          </select>
+                    <p style="font-size:12px;margin:6px 0 0;opacity:.8">همه شیوه‌ها داده‌ها را به‌صورت زنده و خودکار از آمار پایگاه (جداول منابع، نسخه‌ها، اعضا و امانات) می‌خوانند و با تغییر محتوای پایگاه بلافاصله بروزرسانی می‌شوند.</p>
+                </div>
+                <button class="btn ok">ذخیره تنظیمات تب‌ها و شیوه نمایش باکس آمار</button>
             </form>
         </div>';
 
@@ -630,23 +646,39 @@ if ($p === 'settings') {
 
         } elseif ($box === 'slider') {
         $sl_act = get_cms('slider_active') !== '0';
+        $sl_cnt_cur = (int)get_cms('slider_count');
+        if ($sl_cnt_cur < 1 || $sl_cnt_cur > 8) $sl_cnt_cur = 3;
+        $sl_style_cur = get_cms('slider_style') === 'transparent' ? 'transparent' : 'frosted';
         echo '<form class="card" method="post" action="?p=savecms" enctype="multipart/form-data">
             <input type="hidden" name="t" value="' . $tok . '"><input type="hidden" name="active_box" value="slider">
-            <h2>تنظیمات اسلایدر عریض بالای صفحه اصلی پرتال (چرخش ۳ تصویر + فعال/غیرفعال‌سازی)</h2>
+            <h2>تنظیمات اسلایدر عریض بالای صفحه اصلی پرتال (تعداد دلخواه اسلاید + حالت مات/شفاف)</h2>
             <div style="margin-bottom:16px;padding:12px;background:var(--ice);border:1px solid var(--line);border-radius:10px">
                 <label style="display:flex;align-items:center;gap:8px;font-size:14px;color:var(--blue);margin:0;cursor:pointer">
                     <input type="checkbox" name="slider_active" value="1"' . ($sl_act ? ' checked' : '') . '>
                     <b>فعال‌سازی نمایش اسلایدر عریض در بالای صفحه اصلی پرتال (جایگزین باکس آبی قبلی)</b>
                 </label>
-            </div>';
-        for ($si = 1; $si <= 3; $si++) {
+            </div>
+            <div class="grid" style="margin-bottom:16px">
+                <div><label>تعداد اسلایدهای قابل نمایش (۱ تا ۸)</label>
+                    <select name="slider_count" onchange="var n=parseInt(this.value)||3;for(var i=1;i<=8;i++){var el=document.getElementById(\'sl_box\'+i);if(el)el.style.display=(i<=n)?\'\':\'none\';}">';
+                    for ($si = 1; $si <= 8; $si++) {
+                        echo '<option value="' . $si . '"' . ($sl_cnt_cur === $si ? ' selected' : '') . '>' . tr_num($si) . ' اسلاید</option>';
+                    }
+        echo '      </select></div>
+                <div><label>حالت نمایش اسلایدها</label><select name="slider_style">
+                    <option value="frosted"' . ($sl_style_cur === 'frosted' ? ' selected' : '') . '>مات با کلید (پوشش رنگی نیمه‌مات + عنوان، توضیح و دکمه روی هر اسلاید)</option>
+                    <option value="transparent"' . ($sl_style_cur === 'transparent' ? ' selected' : '') . '>شفاف (فقط تصویر، بدون هیچ متن و محتوایی)</option>
+                </select></div>
+            </div>
+            <p style="font-size:12.5px;margin:0 0 14px;color:var(--navy2)">نکته: در حالت «شفاف» هیچ عنوان یا دکمه‌ای روی اسلایدها نمایش داده نمی‌شود و فقط خودِ تصویر (با لینک اختیاری کل اسلاید) چرخش می‌کند.</p>';
+        for ($si = 1; $si <= 8; $si++) {
             $cur_img = get_cms('slider_img' . $si);
-            echo '<div style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;background:#f8fafc">
+            echo '<div id="sl_box' . $si . '" style="border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;background:#f8fafc' . ($si > $sl_cnt_cur ? ';display:none' : '') . '">
                 <h3 style="margin:0 0 10px;font-size:14px;color:var(--navy2)">اسلاید شماره ' . tr_num($si) . '</h3>
                 <div class="grid">
                     <div><label>عنوان اسلاید ' . tr_num($si) . '</label><input name="slider_title' . $si . '" value="' . h(get_cms('slider_title' . $si)) . '"></div>
                     <div><label>زیرعنوان / توضیح کوتاه</label><input name="slider_sub' . $si . '" value="' . h(get_cms('slider_sub' . $si)) . '"></div>
-                    <div><label>لینک دکمه اسلاید (اختیاری)</label><input name="slider_link' . $si . '" dir="ltr" value="' . h(get_cms('slider_link' . $si)) . '" placeholder="?p=home&smode=simple"></div>
+                    <div><label>لینک دکمه/اسلاید (اختیاری)</label><input name="slider_link' . $si . '" dir="ltr" value="' . h(get_cms('slider_link' . $si)) . '" placeholder="?p=home&smode=simple"></div>
                     <div><label>آدرس تصویر اسلاید ' . tr_num($si) . '</label><input name="slider_img' . $si . '" dir="ltr" value="' . h($cur_img) . '" placeholder="uploads/slide' . $si . '.jpg"></div>
                     <div><label>یا آپلود تصویر جدید (JPG/PNG/WebP)</label><input type="file" name="slider_file' . $si . '" accept="image/*"></div>
                 </div>

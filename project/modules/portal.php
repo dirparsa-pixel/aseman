@@ -11,7 +11,11 @@ if ($p === 'home') {
     }
     if (get_cms('slider_active') !== '0') {
         $slides = array();
-        for ($si = 1; $si <= 3; $si++) {
+        $sl_count = (int)get_cms('slider_count');
+        if ($sl_count < 1) $sl_count = 3;
+        if ($sl_count > 8) $sl_count = 8;
+        $sl_style = get_cms('slider_style') === 'transparent' ? 'transparent' : 'frosted';
+        for ($si = 1; $si <= $sl_count; $si++) {
             $st_t = trim(get_cms('slider_title' . $si));
             $st_s = trim(get_cms('slider_sub' . $si));
             $st_i = trim(get_cms('slider_img' . $si));
@@ -23,17 +27,24 @@ if ($p === 'home') {
             }
         }
         if ($slides) {
-            echo '<div class="wide-slider" id="aseman_wide_slider">';
+            echo '<div class="wide-slider' . ($sl_style === 'transparent' ? ' wide-slider-transparent' : '') . '" id="aseman_wide_slider">';
             foreach ($slides as $idx => $sl) {
                 $bg_style = $sl['img'] !== '' ? "background-image:url('" . h($sl['img']) . "');" : "background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 60%,var(--blue) 100%);";
-                echo '<div class="wide-slide' . ($idx === 0 ? ' active' : '') . '" style="' . $bg_style . '">
-                    <div class="wide-slide-overlay"></div>
-                    <div class="wide-slide-content">
+                echo '<div class="wide-slide' . ($idx === 0 ? ' active' : '') . '" style="' . $bg_style . '">';
+                if ($sl_style !== 'transparent') {
+                    echo '<div class="wide-slide-overlay"></div>';
+                }
+                if ($sl_style === 'transparent') {
+                    // حالت شفاف: بدون هیچ متن و محتوایی، فقط تصویر اسلاید نمایش داده می‌شود
+                    if ($sl['link'] !== '') echo '<a class="wide-slide-link" href="' . h($sl['link']) . '" aria-label="اسلاید"></a>';
+                } else {
+                    echo '<div class="wide-slide-content">
                         <h2>' . h($sl['title']) . '</h2>
                         ' . ($sl['sub'] !== '' ? '<p>' . h($sl['sub']) . '</p>' : '') . '
                         ' . ($sl['link'] !== '' ? '<a class="btn ok" href="' . h($sl['link']) . '" style="border:1px solid var(--gold)">مشاهده و دسترسی سریع</a>' : '') . '
-                    </div>
-                </div>';
+                    </div>';
+                }
+                echo '</div>';
             }
             if (count($slides) > 1) {
                 echo '<button type="button" class="slider-nav-btn" style="right:14px" onclick="asemanSlideMove(-1)" title="قبلی">&#10094;</button>

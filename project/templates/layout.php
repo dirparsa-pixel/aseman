@@ -456,6 +456,32 @@ code,pre,kbd,samp,input,select,textarea,button,table,td,th,small,.badge{font-fam
 .slider-dots{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:8px}
 .slider-dot{width:10px;height:10px;border-radius:99px;background:rgba(255,255,255,.45);border:none;cursor:pointer;padding:0;transition:.25s}
 .slider-dot.active{width:26px;background:var(--gold)}
+.wide-slider-transparent .wide-slide{padding:0}
+.wide-slide-link{position:absolute;inset:0;z-index:3}
+
+/* شیوه‌های نمایش باکس آمار پرتال */
+.stat-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.st-tile{border-radius:12px;padding:14px 10px;text-align:center;color:#fff;display:flex;flex-direction:column;gap:4px;box-shadow:0 8px 20px -10px rgba(12,59,71,.4)}
+.st-tile b{font-size:22px;line-height:1.2}
+.st-tile span{font-size:11.5px;opacity:.92}
+.st-tile.t1{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 100%)}
+.st-tile.t2{background:linear-gradient(135deg,var(--blue) 0%,#0e7490 100%)}
+.st-tile.t3{background:linear-gradient(135deg,#0f766e 0%,var(--ok) 100%)}
+.st-tile.t4{background:linear-gradient(135deg,#b45309 0%,var(--gold) 100%);color:var(--navy)}
+.st-tile.t5{background:linear-gradient(135deg,#4c1d95 0%,#7c3aed 100%)}
+.stats-minimal .sm-inline{display:flex;flex-wrap:wrap;align-items:center;gap:8px;font-size:13px}
+.stats-minimal .sm-inline b{color:var(--blue);font-size:16px}
+.stats-minimal .sm-inline i{font-style:normal;opacity:.35}
+.stats-dark{background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 100%)!important;color:#fff;border:none!important}
+.stats-dark h2{color:#fff!important}
+.stats-dark .sd-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:10px;margin-bottom:12px}
+.stats-dark .sd-item{text-align:center;background:rgba(255,255,255,.07);border:1px solid rgba(226,194,117,.35);border-radius:12px;padding:12px 8px}
+.stats-dark .sd-item b{display:block;color:var(--gold);font-size:21px}
+.stats-dark .sd-item span{font-size:11.5px;color:#dbeafe}
+.stats-dark .list-clean li{color:#eef2ff;border-color:rgba(255,255,255,.12)}
+.stats-dark .list-clean b{color:var(--gold)}
+.stats-dark .tabs a{color:#e2e8f0}
+.stats-dark .tabs a.on{background:var(--gold);color:var(--navy)}
 
 /* فوتر سازمانی */
 .site-footer{background:linear-gradient(180deg,var(--navy) 0%,#051b22 100%);color:rgba(255,255,255,.88);border-top:4px solid var(--gold);margin-top:36px;padding:32px 24px 18px;font-size:13px}

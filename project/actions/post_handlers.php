@@ -948,7 +948,7 @@ if (($p === 'auth_save' || $p === 'auth_del') && can('authority')) {
     if ($p === 'savecms' && can('cms')) {
         $lic = get_license();
         $theme_locked = !empty($lic['lock_theme']);
-                for ($si = 1; $si <= 3; $si++) {
+                for ($si = 1; $si <= 8; $si++) {
             $fk_s = 'slider_file' . $si;
             if (!empty($_FILES[$fk_s]['name'])) {
                 $up_sl = secure_upload_file($_FILES[$fk_s], array('png','jpg','jpeg','webp','gif'), array('image/jpeg','image/png','image/gif','image/webp'), 'slide' . $si . '_');
@@ -957,9 +957,19 @@ if (($p === 'auth_save' || $p === 'auth_del') && can('authority')) {
         }
         if (isset($_POST['active_box']) && $_POST['active_box'] === 'slider') {
             $_POST['slider_active'] = isset($_POST['slider_active']) ? '1' : '0';
+            $sl_cnt = isset($_POST['slider_count']) ? (int)$_POST['slider_count'] : 3;
+            if ($sl_cnt < 1) $sl_cnt = 1;
+            if ($sl_cnt > 8) $sl_cnt = 8;
+            $_POST['slider_count'] = (string)$sl_cnt;
+            $sl_st_arr = array('frosted', 'transparent');
+            $_POST['slider_style'] = (isset($_POST['slider_style']) && in_array($_POST['slider_style'], $sl_st_arr)) ? $_POST['slider_style'] : 'frosted';
         }
         if (isset($_POST['stats_tabs_arr']) && is_array($_POST['stats_tabs_arr'])) {
             $_POST['stats_tabs_cfg'] = implode(',', array_map('trim', $_POST['stats_tabs_arr']));
+        }
+        if (isset($_POST['active_box']) && $_POST['active_box'] === 'layout') {
+            $sb_st_arr = array('tabs', 'tiles', 'minimal', 'dark');
+            $_POST['stats_box_style'] = (isset($_POST['stats_box_style']) && in_array($_POST['stats_box_style'], $sb_st_arr)) ? $_POST['stats_box_style'] : 'tabs';
         }
         if (!empty($_FILES['logo_file']['name'])) {
             $up_lg = secure_upload_file($_FILES['logo_file'], array('png','jpg','jpeg','webp','gif'), array('image/jpeg','image/png','image/gif','image/webp'), 'logo_');
