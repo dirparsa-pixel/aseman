@@ -408,7 +408,8 @@ if ($p === 'rec') {
                     <label>کتابخانه اعضای ورودی</label><select name="loc">';
                     foreach ($allowed_locs as $lc) echo '<option value="' . h($lc) . '">' . h($lc) . '</option>';
         echo '      </select><br><br>
-                    <label>انتخاب فایل اکسل (.xls, .xlsx, .csv)</label><input type="file" name="f" accept=".xls,.xlsx,.csv" required><br><br>
+                    <label>انتخاب فایل اکسل (.xlsx, .csv)</label><input type="file" name="f" accept=".xlsx,.csv" required>
+                    <p style="font-size:12px;color:var(--mut);margin-top:6px">توجه: فرمت قدیمی <b>.xls</b> پشتیبانی نمی‌شود؛ ابتدا در Excel باز و با فرمت <b>xlsx</b> ذخیره کنید.</p><br>
                     <button class="btn pri">بارگذاری لیست اعضا</button>
                 </form>
             </div>

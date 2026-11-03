@@ -1038,6 +1038,11 @@ if (($p === 'auth_save' || $p === 'auth_del') && can('authority')) {
 
         if (!empty($_FILES['f']['tmp_name'])) {
             $parsed_xl = parse_excel_to_preview_records($_FILES['f']['tmp_name'], $sel_loc, $ws_key);
+            if (!$parsed_xl) {
+                $_SESSION['flash'] = 'فایل اکسل خوانده نشد یا رکورد معتبری (با ستون عنوان) در آن یافت نگردید. لطفاً از فایل‌های با فرمت xlsx یا CSV (UTF-8) استفاده کنید؛ برای فایل‌های قدیمی .xls ابتدا آنها را در Excel باز و با فرمت xlsx ذخیره نمایید.';
+                header("Location: ?p=imp_exp");
+                exit;
+            }
             if ($mode === 'preview') {
                 $_SESSION['iso_preview']  = $parsed_xl;
                 $_SESSION['iso_loc']      = $sel_loc;
@@ -1143,12 +1148,38 @@ if (($p === 'auth_save' || $p === 'auth_del') && can('authority')) {
         $def_loc = is_loc_restricted() ? user_loc() : (isset($_POST['loc']) ? $_POST['loc'] : $Locations[0]);
         if (!empty($_FILES['f']['tmp_name'])) {
             $rows = parse_excel($_FILES['f']['tmp_name']);
+            // شناسایی ستون‌ها از روی سرستون فایل (نام / تلفن / کد عضویت) تا داده در ستون اشتباه ذخیره نشود
+            $col_name = 0; $col_phone = 1; $col_mcode = 2;
+            if ($rows) {
+                $hdr = array_map(function($x){ return xl_norm_digits(trim((string)$x)); }, $rows[0]);
+                $looks_hdr = false;
+                foreach ($hdr as $hv) {
+                    $hs = trim($hv);
+                    if ($hs === '') continue;
+                    if (mb_strpos($hs, 'نام') !== false || stripos($hs, 'name') !== false || mb_strpos($hs, 'عضو') !== false || stripos($hs, 'phone') !== false || mb_strpos($hs, 'تلفن') !== false || mb_strpos($hs, 'موبایل') !== false || stripos($hs, 'mobile') !== false || mb_strpos($hs, 'کد') !== false) { $looks_hdr = true; break; }
+                }
+                if ($looks_hdr) {
+                    $found_name = null; $found_phone = null; $found_mcode = null;
+                    foreach ($hdr as $ci => $hv) {
+                        $hs = trim($hv);
+                        if ($hs === '') continue;
+                        if ($found_phone === null && (mb_strpos($hs, 'تلفن') !== false || mb_strpos($hs, 'موبایل') !== false || mb_strpos($hs, 'تماس') !== false || stripos($hs, 'phone') !== false || stripos($hs, 'mobile') !== false)) $found_phone = $ci;
+                        elseif ($found_mcode === null && (mb_strpos($hs, 'کد') !== false || stripos($hs, 'code') !== false)) $found_mcode = $ci;
+                        elseif ($found_name === null && (mb_strpos($hs, 'نام') !== false || stripos($hs, 'name') !== false)) $found_name = $ci;
+                    }
+                    if ($found_name !== null) $col_name = $found_name;
+                    if ($found_phone !== null) $col_phone = $found_phone;
+                    if ($found_mcode !== null) $col_mcode = $found_mcode;
+                    // اگر دو ستون یکی شدند، ترتیب پیش‌فرض را بازگردان
+                    if ($col_name === $col_phone || $col_name === $col_mcode || $col_phone === $col_mcode) { $col_name = 0; $col_phone = 1; $col_mcode = 2; }
+                }
+            }
             foreach ($rows as $idx => $r) {
-                $c0 = isset($r[0]) ? $r[0] : '';
+                $c0 = isset($r[$col_name]) ? trim((string)$r[$col_name]) : '';
                 if ($idx === 0 && (stripos($c0, 'نام') !== false || stripos($c0, 'name') !== false)) continue;
                 if (empty($c0)) continue;
                 if (!lic_check_member_quota(1)) break;
-                $db->prepare("INSERT INTO members(name,phone,mcode,loc) VALUES(?,?,?,?)")->execute(array($c0, isset($r[1]) ? $r[1] : '', isset($r[2]) ? $r[2] : '', $def_loc));
+                $db->prepare("INSERT INTO members(name,phone,mcode,loc) VALUES(?,?,?,?)")->execute(array($c0, isset($r[$col_phone]) ? trim((string)$r[$col_phone]) : '', isset($r[$col_mcode]) ? trim((string)$r[$col_mcode]) : '', $def_loc));
                 $cnt++;
             }
         }

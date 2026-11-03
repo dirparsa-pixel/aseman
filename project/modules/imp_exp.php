@@ -152,8 +152,9 @@ if (!defined('ASEMAN_ROOT')) die('Access Denied');
             echo '      </select>
                     </div>
                 </div><br>
-                <label>۳. انتخاب فایل اکسل (.xlsx, .xls, .csv) *</label>
-                <input type="file" name="f" accept=".xls,.xlsx,.csv" required><br><br>
+                <label>۳. انتخاب فایل اکسل (.xlsx, .csv) *</label>
+                <input type="file" name="f" accept=".xlsx,.csv" required><br><br>
+                <p style="font-size:12px;color:var(--mut);margin-top:6px">توجه: اگر فایل شما با فرمت قدیمی <b>.xls</b> است، ابتدا آن را در Excel باز کرده و با فرمت <b>xlsx</b> ذخیره کنید؛ در غیر این صورت داده‌ها به‌درستی خوانده نمی‌شوند.</p>
                 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                     <button class="btn pri" name="mode" value="preview">بارگذاری و نمایش پیش‌نمایش منابع (پیشنهادی)</button>
                     <button class="btn ok" name="mode" value="direct" onclick="return confirm(\'آیا مایلید بدون مرحله پیش‌نمایش، رکوردها مستقیماً در کتابخانه انتخابی ثبت شوند؟\')">ثبت مستقیم بدون پیش‌نمایش</button>
