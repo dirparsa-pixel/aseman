@@ -530,7 +530,7 @@ function xl_norm_digits($s) {
 function xl_norm_text($s) {
     $s = str_replace("\xEF\xBB\xBF", '', (string)$s);          // BOM میانی
     $s = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/u', '', $s); // کاراکترهای کنترل
-    $s = str_replace(array('\u{200C}', '\u{200B}'), '', $s);   // ZWNJ / ZWSP
+    $s = preg_replace('/\x{200C}|\x{200B}/u', '', $s);         // ZWNJ / ZWSP
     if (function_exists('normalizer_normalize')) {
         $n = @normalizer_normalize($s, Normalizer::FORM_C);
         if ($n !== false) $s = $n;
@@ -538,30 +538,239 @@ function xl_norm_text($s) {
     return trim($s);
 }
 
-// استخراج رشته‌های مشترک sharedStrings با پشتیبانی از runs چندتکه‌ای
+// تشخیص اینکه آیا سرستون ردیف اولِ داده است یا خیر (حداقل ۲ سلول غیرخالی + حداقل یک برچسب شناخته‌شده)
+function xl_header_score_row($row, $ws_fields = null) {
+    $non_empty = 0;
+    foreach ($row as $v) if (trim((string)$v) !== '') $non_empty++;
+    if ($non_empty < 2) return array(false, $non_empty);
+    $known = 0;
+    $labels = array('نام','عنوان','شابک','شاپا','زبان','ناشر','نشر','محل','سال','صفحه','جلد','نسخه','ثبت','یادداشت','موضوع','دیویی','کنگره','پدیدآور','مسئولیت','ویراست','فروست','مجموعه','تلفن','موبایل','تماس','کد','عضو','نوع','منبع','سازمانی','ابعاد','قیاس');
+    foreach ($row as $v) {
+        $cv = xl_norm_digits(xl_norm_text($v));
+        if ($cv === '') continue;
+        $is_label = false;
+        foreach ($labels as $lb) if (mb_strpos($cv, $lb) !== false) { $is_label = true; break; }
+        if (!$is_label && preg_match('/\b(0\d\d|1\d\d|2\d\d|3\d\d|6\d\d|7\d\d)\b/', $cv)) $is_label = true;
+        if (!$is_label && $ws_fields) {
+            foreach ($ws_fields as $fd) {
+                if (($fd['code'] !== '' && stripos(strtolower($cv), strtolower(xl_norm_digits($fd['code']))) !== false) ||
+                    ($fd['label'] !== '' && mb_strpos($cv, $fd['label']) !== false)) { $is_label = true; break; }
+            }
+        }
+        if ($is_label) $known++;
+    }
+    return array($known >= 1, $non_empty);
+}
+
+// استخراج رشته‌های مشترک sharedStrings با پشتیبانی از runs چندتکه‌ای و متون RTL
+function xl_decode_entities($t) {
+    $t = html_entity_decode((string)$t, ENT_QUOTES | ENT_XML1, 'UTF-8');
+    // کاراکترهای Unicode به شکل &#xNNNN; / &#NNNN; که در برخی خروجی‌های Excel فارسی رایج است
+    $t = preg_replace_callback('/&#x([0-9a-fA-F]{1,6});|&#(\d{1,7});/', function ($m) {
+        $cp = isset($m[2]) && $m[2] !== '' ? (int)$m[2] : hexdec($m[1]);
+        if ($cp <= 0 || $cp > 0x10FFFF) return '';
+        if (function_exists('mb_chr')) return mb_chr($cp, 'UTF-8');
+        if ($cp < 0x80) return chr($cp);
+        if ($cp < 0x800) return chr(0xC0 | ($cp >> 6)) . chr(0x80 | ($cp & 63));
+        if ($cp < 0x10000) return chr(0xE0 | ($cp >> 12)) . chr(0x80 | (($cp >> 6) & 63)) . chr(0x80 | ($cp & 63));
+        return chr(0xF0 | ($cp >> 18)) . chr(0x80 | (($cp >> 12) & 63)) . chr(0x80 | (($cp >> 6) & 63)) . chr(0x80 | ($cp & 63));
+    }, $t);
+    return $t;
+}
+
+function xl_si_text($si_inner) {
+    $t = '';
+    // حالت استاندارد: تمام گره‌های <t> (شامل runs های تکه‌تکه <r><t>)
+    if (preg_match_all('#<t\b[^>]*>(.*?)</t>#s', $si_inner, $tm)) {
+        foreach ($tm[1] as $part) $t .= $part;
+    }
+    // حالت جایگزین: محتوای متنی مستقیم داخل <si> بدون تگ <t> (سازگار با خروجی‌های قدیمی)
+    if (trim($t) === '' && strpos($si_inner, '<t') === false) {
+        $t = strip_tags($si_inner);
+    }
+    return xl_norm_text(xl_decode_entities($t));
+}
+
 function xl_read_shared_strings($xml) {
     $strings = array();
     if ($xml === false || $xml === '') return $strings;
-    if (!preg_match_all('#<si\b[^>]*>(.*?)</si>#s', $xml, $si_m)) return $strings;
-    foreach ($si_m[1] as $si_inner) {
-        $t = '';
-        if (preg_match_all('#<t\b[^>]*?(?:\sxml:space="preserve")?[^>]*>(.*?)</t>#s', $si_inner, $tm)) {
-            foreach ($tm[1] as $part) $t .= $part;
+    // روش مطمئن: DOMParser (همان روش نسخه تک‌فایل قدیمی که پایدار بود)
+    if (class_exists('DOMDocument')) {
+        $dom = new DOMDocument;
+        $prev = libxml_use_internal_errors(true);
+        if ($dom->loadXML($xml, LIBXML_NOENT | LIBXML_NONET)) {
+            $xsi = $dom->getElementsByTagName('si');
+            foreach ($xsi as $si) {
+                $t = '';
+                $xt = $si->getElementsByTagName('t');
+                if ($xt->length > 0) {
+                    foreach ($xt as $tnode) $t .= $tnode->textContent;
+                } else {
+                    $t = $si->textContent;
+                }
+                $strings[] = xl_norm_text($t);
+            }
         }
-        $strings[] = xl_norm_text(html_entity_decode($t, ENT_QUOTES | ENT_XML1, 'UTF-8'));
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+        if ($strings) return $strings;
+    }
+    // روش ذخیره: regex با پوشش هر دو حالت
+    if (preg_match_all('#<si\b[^>]*>(.*?)</si>#s', $xml, $si_m)) {
+        foreach ($si_m[1] as $si_inner) $strings[] = xl_si_text($si_inner);
     }
     return $strings;
 }
 
-// یافتن فایل کاربرگه اول از داخل بسته OOXML (نام فیزیکی sheet1.xml تضمینی نیست!)
+// استخراج متن یک ردیف <row> به صورت نقشه «شاخص ستون => مقدار»
+function xl_parse_row_cells($row_inner, $strings) {
+    $row_map = array();
+    $next_idx = 0;
+    // سلول‌های خالی بدون مقدار (<c r="B2"/>) نیز درست پیمایش شوند
+    if (preg_match_all('#<c\b([^>]*?)(/>|>(.*?)</c>)#s', $row_inner, $cm_all, PREG_SET_ORDER)) {
+        foreach ($cm_all as $cm_set) {
+            $attrs = $cm_set[1];
+            $inner = isset($cm_set[4]) ? $cm_set[4] : '';
+            if (preg_match('/\br="([A-Z]+)\d*"/i', $attrs, $rl)) {
+                $letters = strtoupper($rl[1]);
+                $col_idx = 0;
+                for ($li = 0; $li < strlen($letters); $li++) $col_idx = $col_idx * 26 + (ord($letters[$li]) - 64);
+                $col_idx -= 1;
+            } else {
+                $col_idx = $next_idx;
+            }
+            $next_idx = $col_idx + 1;
+            $type_s = preg_match('/\bt="(s|inlineStr|str)"/i', $attrs, $tm2) ? strtolower($tm2[1]) : '';
+            $v = '';
+            if ($type_s === 'inlineStr') {
+                if (preg_match_all('#<t\b[^>]*>(.*?)</t>#s', $inner, $tt)) $v = implode('', $tt[1]);
+            } elseif (preg_match('#<v\b[^>]*>(.*?)</v>#s', $inner, $vm)) {
+                $v = $vm[1];
+            } elseif (preg_match('#<t\b[^>]*>(.*?)</t>#s', $inner, $tm3)) {
+                $v = $tm3[1];
+            }
+            if ($type_s === 's') {
+                $vi = (int)trim($v);
+                $v = isset($strings[$vi]) ? $strings[$vi] : '';
+            } else {
+                $v = xl_decode_entities($v);
+            }
+            $row_map[$col_idx] = xl_norm_text($v);
+        }
+    }
+    return $row_map;
+}
+
+// تبدیل شماره سریال تاریخ اکسل (مبنای ۱۹۰۰) به تاریخ میلادی
+function xl_serial_to_date($n) {
+    $n = (float)$n;
+    if ($n < 1 || $n > 2958465) return '';
+    if ($n < 60) $n += 1; // پرش معروف باگ روز ۲۹ فوریه ۱۹۰۰ در Excel
+    $ts = ($n - 25569) * 86400;
+    return gmdate('Y-m-d', (int)round($ts));
+}
+
+// پیمایش کاربرگه با SimpleXML و بازگرداندن ردیف‌ها (آرایه‌های متنی هم‌تراز)
+function xl_rows_from_sxml(SimpleXMLElement $sx, $strings) {
+    $pending = array();
+    $max_col = 0;
+    $nsx = $sx->getNamespaces(true);
+    $main_ns = isset($nsx['']) ? $nsx[''] : '';
+    foreach ($sx->sheetData->row as $r) {
+        $cells = array();
+        if ($main_ns !== '') {
+            $sd = $r->children($main_ns);
+            if (isset($sd->c)) $cells = $sd->c;
+        }
+        if (!$cells) $cells = $r->c;
+        $row_map = array();
+        $pos = 0;
+        foreach ($cells as $c) {
+            $ref = (string)$c['r'];
+            if ($ref !== '' && preg_match('/^([A-Z]+)/i', $ref, $rl)) {
+                $letters = strtoupper($rl[1]);
+                $col_idx = 0;
+                for ($li = 0; $li < strlen($letters); $li++) $col_idx = $col_idx * 26 + (ord($letters[$li]) - 64);
+                $col_idx -= 1;
+            } else {
+                $col_idx = $pos;
+            }
+            $pos = $col_idx + 1;
+            $type_s = strtolower((string)$c['t']);
+            $v = '';
+            if ($type_s === 'inlineStr') {
+                if (isset($c->is)) {
+                    $v = (string)$c->is->t;
+                    if ($v === '') { foreach ($c->is->r as $rr) $v .= (string)$rr->t; }
+                }
+            } else {
+                $v = isset($c->v) ? (string)$c->v : '';
+            }
+            if ($type_s === 's') {
+                $vi = (int)trim($v);
+                $v = isset($strings[$vi]) ? $strings[$vi] : '';
+            }
+            $row_map[$col_idx] = xl_norm_text($v);
+        }
+        if (array_filter($row_map, function ($x) { return $x !== ''; })) {
+            $pending[] = $row_map;
+            if ($row_map) $max_col = max($max_col, max(array_keys($row_map)));
+        }
+    }
+    $out = array();
+    foreach ($pending as $row_map) {
+        $row = array();
+        for ($ci = 0; $ci <= $max_col; $ci++) $row[$ci] = isset($row_map[$ci]) ? $row_map[$ci] : '';
+        $out[] = $row;
+    }
+    return $out;
+}
+
+// یافتن فایل کاربرگه اول از داخل بسته OOXML با ترتیب واقعی workbook.xml
 function xl_first_sheet_xml(ZipArchive $zip) {
+    // روش دقیق: workbook.xml -> rels -> مسیر فیزیکی اولین شیت
+    $wb_xml = $zip->getFromName('xl/workbook.xml');
+    $rels_xml = $zip->getFromName('xl/_rels/workbook.xml.rels');
+    if ($wb_xml !== false && $rels_xml !== false && $wb_xml !== '' && $rels_xml !== '' && class_exists('DOMDocument')) {
+        $rid_map = array();
+        $rd = new DOMDocument;
+        $prev = libxml_use_internal_errors(true);
+        if ($rd->loadXML($rels_xml)) {
+            foreach ($rd->getElementsByTagName('Relationship') as $rel) {
+                if (stripos($rel->getAttribute('Type'), '/worksheet') !== false) {
+                    $rid_map[$rel->getAttribute('Id')] = $rel->getAttribute('Target');
+                }
+            }
+        }
+        $wd = new DOMDocument;
+        if ($wd->loadXML($wb_xml)) {
+            $sheets = $wd->getElementsByTagName('sheet');
+            if ($sheets->length > 0) {
+                $rid = '';
+                foreach ($sheets->item(0)->attributes as $at) {
+                    if ($at->localName === 'id') { $rid = $at->value; break; }
+                }
+                if ($rid !== '' && isset($rid_map[$rid])) {
+                    $target = ltrim($rid_map[$rid], '/');
+                    if (strpos($target, 'xl/') !== 0) $target = 'xl/' . $target;
+                    for ($i = 0; $i < $zip->numFiles; $i++) {
+                        if (strcasecmp($zip->getNameIndex($i), $target) === 0) return $zip->getNameIndex($i);
+                    }
+                }
+            }
+        }
+        libxml_clear_errors();
+        libxml_use_internal_errors($prev);
+    }
+    // روش ذخیره: sheet1.xml یا اولین worksheet موجود
+    if (($idx = $zip->locateName('xl/worksheets/sheet1.xml')) !== false) return $zip->getNameIndex($idx);
     $names = array();
     for ($i = 0; $i < $zip->numFiles; $i++) {
         $nm = $zip->getNameIndex($i);
-        if (preg_match('#^xl/worksheets/[^/]+\.xml$#i', $nm)) $names[$nm] = strcasecmp($nm, 'xl/worksheets/sheet1.xml') === 0 ? -1 : $nm;
+        if (preg_match('#^xl/worksheets/[^/]+\.xml$#i', $nm)) $names[] = $nm;
     }
     if (!$names) return false;
-    sort($names); // معمولاً sheet1.xml -> اولین عنصر
+    sort($names, SORT_STRING);
     return $names[0];
 }
 
@@ -570,7 +779,11 @@ function parse_excel($file) {
     $sig = @file_get_contents($file, false, null, 0, 8);
     $is_zip = (strncmp((string)$sig, "PK\x03\x04", 4) === 0);
     $is_ole = (strncmp((string)$sig, "\xD0\xCF\x11\xE0", 4) === 0);
-    $looks_xls = ($is_ole || strtolower(pathinfo((string)(isset($_FILES['f']['name']) ? $_FILES['f']['name'] : $file), PATHINFO_EXTENSION)) === 'xls');
+    $orig_name = '';
+    if (isset($_FILES['f']['name'])) $orig_name = $_FILES['f']['name'];
+    elseif (isset($_FILES['file']['name'])) $orig_name = $_FILES['file']['name'];
+    $ext = strtolower(pathinfo((string)($orig_name !== '' ? $orig_name : $file), PATHINFO_EXTENSION));
+    $looks_xls = ($is_ole || $ext === 'xls');
 
     if ($is_zip && class_exists('ZipArchive')) {
         $zip = new ZipArchive;
@@ -579,84 +792,76 @@ function parse_excel($file) {
             $sheet_name = xl_first_sheet_xml($zip);
             $xml = $sheet_name !== false ? $zip->getFromName($sheet_name) : false;
             if ($xml !== false && $xml !== '') {
-                if (preg_match_all('#<row\b[^>]*>(.*?)</row>#s', $xml, $rm_all)) {
-                    $global_max_row_len = 0;
+                // روش ۱: SimpleXML (همان روش نسخه تک‌فایل قدیمی؛ در برابر XML بزرگ پایدارتر)
+                $sx = @simplexml_load_string($xml);
+                if ($sx !== false && isset($sx->sheetData->row)) {
+                    $rows = xl_rows_from_sxml($sx, $strings);
+                }
+                // روش ۲: پارس regex برای فایل‌هایی با namespace پیچیده یا ساختار خاص
+                if (!$rows && preg_match_all('#<row\b[^>]*r="(\d+)"[^>]*>(.*?)</row>#s', $xml, $rm_all, PREG_SET_ORDER)) {
                     $pending_rows = array();
-                    foreach ($rm_all[1] as $row_inner) {
-                        $row_map = array();
-                        $next_idx = 0;
-                        // سلول‌های خالی بدون مقدار (<c r="B2"/>) نیز درست پیمایش شوند
-                        if (preg_match_all('#<c\b([^>]*?)(/>|>(.*?)</c>)#s', $row_inner, $cm_all, PREG_SET_ORDER)) {
-                            foreach ($cm_all as $cm_set) {
-                                $attrs = $cm_set[1];
-                                $inner = isset($cm_set[4]) ? $cm_set[4] : '';
-                                if (preg_match('/\br="([A-Z]+)\d+"/i', $attrs, $rl)) {
-                                    $letters = strtoupper($rl[1]);
-                                    $col_idx = 0;
-                                    for ($li = 0; $li < strlen($letters); $li++) $col_idx = $col_idx * 26 + (ord($letters[$li]) - 64);
-                                    $col_idx -= 1;
-                                } else {
-                                    $col_idx = $next_idx;
-                                }
-                                $next_idx = $col_idx + 1;
-                                $type_s = preg_match('/\bt="(s|inlineStr|str)"/i', $attrs, $tm2) ? strtolower($tm2[1]) : '';
-                                $v = '';
-                                if ($type_s === 'inlineStr') {
-                                    if (preg_match_all('#<t\b[^>]*>(.*?)</t>#s', $inner, $tt)) $v = implode('', $tt[1]);
-                                } elseif (preg_match('#<v\b[^>]*>(.*?)</v>#s', $inner, $vm)) {
-                                    $v = $vm[1];
-                                } elseif (preg_match('#<t\b[^>]*>(.*?)</t>#s', $inner, $tm3)) {
-                                    $v = $tm3[1];
-                                }
-                                if ($type_s === 's') {
-                                    $vi = (int)trim($v);
-                                    $v = isset($strings[$vi]) ? $strings[$vi] : '';
-                                } else {
-                                    $v = html_entity_decode($v, ENT_QUOTES | ENT_XML1, 'UTF-8');
-                                }
-                                $row_map[$col_idx] = xl_norm_text($v);
-                            }
-                        }
-                        if (array_filter($row_map, function($x){ return $x !== ''; })) {
+                    $global_max_col = 0;
+                    foreach ($rm_all as $rm_set) {
+                        $row_map = xl_parse_row_cells($rm_set[2], $strings);
+                        if (array_filter($row_map, function ($x) { return $x !== ''; })) {
                             $pending_rows[] = $row_map;
-                            if ($row_map) $global_max_row_len = max($global_max_row_len, max(array_keys($row_map)));
+                            $global_max_col = max($global_max_col, max(array_keys($row_map)));
                         }
                     }
-                    // پهنای یکنواخت فقط بر اساس آخرین ستونِ واقعاً دارای داده
-                    $width = max($global_max_row_len, 2);
                     foreach ($pending_rows as $row_map) {
                         $row = array();
-                        for ($ci = 0; $ci <= $width; $ci++) $row[$ci] = isset($row_map[$ci]) ? $row_map[$ci] : '';
+                        for ($ci = 0; $ci <= $global_max_col; $ci++) $row[$ci] = isset($row_map[$ci]) ? $row_map[$ci] : '';
                         $rows[] = $row;
                     }
                 }
             }
             $zip->close();
             if ($rows) return $rows;
-        }
-        if ($is_zip) {
-            // فایل zip (xlsx) اما بدون داده قابل استخراج
+            if ($looks_xls) {
+                // xlsx جعلی با پسوند xls؟ دوباره امتياز نمی‌دهیم — داده‌ای نبود
+                return array();
+            }
             return array();
         }
     }
 
     if ($looks_xls) {
-        // فرمت باینری قدیمی .xls (OLE2) — از خواندن آن به‌عنوان CSV/HTML خودداری شود تا داده‌ها بهم نریزد
-        return array();
+        // اگر فایل با پسوند .xls در واقع HTML (خروجی قدیمی سامانه) باشد، از مسیر HTML خوانده شود
+        $head_sniff = @file_get_contents($file, false, null, 0, 512);
+        $is_html_like = ((bool)preg_match('/^\s*(\xEF\xBB\xBF)?\s*<(!doctype|html|table|workbook|\?xml)/i', (string)$head_sniff));
+        if (!$is_html_like) {
+            // فرمت باینری قدیمی .xls (OLE2) — از خواندن آن به‌عنوان CSV/HTML خودداری شود تا داده‌ها بهم نریزد
+            return array();
+        }
     }
 
     $raw_content = @file_get_contents($file);
-    // تشخیص قوی‌تر فایل HTML/XML اکسل جعلی (xls وب) — حتی بدون تگ <table>
-    if ($raw_content !== false && preg_match('/^\s*(\xEF\xBB\xBF)?\s*<(html|table|?xml)/i', $raw_content)) {
-        if (preg_match_all('/<tr[^>]*>(.*?)<\/tr>/is', $raw_content, $tr_m)) {
+    // تشخیص فایل HTML/XML اکسل جعلی (xls وب یا خروجی قدیمی سامانه)
+    if ($raw_content !== false && preg_match('/^\s*(\xEF\xBB\xBF)?\s*<(!doctype|html|table|\?xml|Workbook)/i', $raw_content)) {
+        if (stripos($raw_content, '<table') !== false && preg_match_all('/<tr[^>]*>(.*?)<\/tr>/is', $raw_content, $tr_m)) {
             foreach ($tr_m[1] as $tr_html) {
                 if (preg_match_all('/<t[dh][^>]*>(.*?)<\/t[dh]>/is', $tr_html, $td_m)) {
                     $row = array();
                     foreach ($td_m[1] as $cell) {
-                        $row[] = xl_norm_text(html_entity_decode(strip_tags($cell), ENT_QUOTES, 'UTF-8'));
+                        $row[] = xl_norm_text(xl_decode_entities(strip_tags($cell)));
                     }
                     if (array_filter($row)) $rows[] = $row;
                 }
+            }
+            if ($rows) return $rows;
+        }
+        // SpreadsheetML 2003 (.xml)
+        if (stripos($raw_content, 'urn:schemas-microsoft-com:office:spreadsheet') !== false && preg_match_all('#<Row\b[^>]*>(.*?)</Row>#s', $raw_content, $rm2)) {
+            foreach ($rm2[1] as $rin) {
+                $row = array();
+                if (preg_match_all('#<Cell\b[^>]*>(.*?)</Cell>#s', $rin, $cl)) {
+                    foreach ($cl[1] as $cin) {
+                        $tv = '';
+                        if (preg_match('#<Data\b[^>]*>(.*?)</Data>#s', $cin, $dm)) $tv = $dm[1];
+                        $row[] = xl_norm_text(xl_decode_entities($tv));
+                    }
+                }
+                if (array_filter($row)) $rows[] = $row;
             }
             if ($rows) return $rows;
         }
@@ -733,61 +938,77 @@ function parse_excel_to_preview_records($file, $loc_name, $ws_key = 'book') {
     $default_rtype = isset($cfg['worksheets'][$ws_key]['rtype']) ? $cfg['worksheets'][$ws_key]['rtype'] : 'book';
     $rt_map = array('کتاب'=>'book', 'مقاله'=>'article', 'پایان‌نامه'=>'thesis', 'پایان نامه'=>'thesis', 'نقشه'=>'other', 'سایر'=>'other', 'سایر منابع'=>'other', 'book'=>'book', 'article'=>'article', 'thesis'=>'thesis', 'other'=>'other');
 
-    // تشخیص سرستون‌ها: اولین ردیفِ دارای حداقل ۲ سلول غیرخالی به‌عنوان سرستون در نظر گرفته می‌شود
+    // تشخیص سرستون‌ها: اولین ردیفِ دارای حداقل ۲ سلول غیرخالی و دست‌کم یک برچسب شناخته‌شده
     $header_map = array(); // col_index => field_key ('f010', ..., 'rtype', 'copies', 'reg_no', 'loc')
     $is_header = false;
     $header_row_idx = -1;
     $first_row = $rows[0];
 
-    foreach ($rows as $h_r_idx => $h_row) {
-        $non_empty_cnt = 0;
-        foreach ($h_row as $vv) if (trim((string)$vv) !== '') $non_empty_cnt++;
-        if ($non_empty_cnt < 2 && count($rows) > 1) continue; // احتمالاً داده است، نه سرستون
-        $header_map = array();
+    // نگاشت محلی «متن سرستون => کلید فیلد» — ترتیب شرط‌ها از اختصاصی به عام است
+    $match_header_cell = function ($cv) use ($ws_fields, $cols) {
+        if ($cv === '') return null;
+        $cv_en = strtolower($cv);
+        // کدهای اختصاصی MARC با زیرفیلد
+        if (preg_match('/200\s*[\$٤]?\s*a/iu', $cv) || mb_strpos($cv, 'عنوان اصلی') !== false || $cv === 'عنوان' || mb_strpos($cv_en, 'title') !== false) return 'f200a';
+        if (preg_match('/200\s*[\$٤]?\s*e/iu', $cv) || mb_strpos($cv, 'عنوان فرعی') !== false || mb_strpos($cv, 'عنوان موازی') !== false) return 'f200e';
+        if (preg_match('/200\s*[\$٤]?\s*f/iu', $cv) || mb_strpos($cv, 'نخستین پدیدآور') !== false || mb_strpos($cv, 'مسئولیت') !== false) return 'f200f';
+        if (preg_match('/210\s*[\$٤]?\s*a/iu', $cv) || mb_strpos($cv, 'محل نشر') !== false || mb_strpos($cv, 'شهر نشر') !== false) return 'f210a';
+        if (preg_match('/210\s*[\$٤]?\s*c/iu', $cv) || mb_strpos($cv, 'نام ناشر') !== false || mb_strpos($cv, 'ناشر') !== false) return 'f210c';
+        if (preg_match('/210\s*[\$٤]?\s*d/iu', $cv) || mb_strpos($cv, 'سال نشر') !== false || mb_strpos($cv, 'تاریخ نشر') !== false) return 'f210d';
+        // ستون‌های جانبی سامانه (قبل از کدهای عمومی بررسی شوند)
+        if (mb_strpos($cv, 'نوع منبع') !== false || mb_strpos($cv_en, 'rtype') !== false || mb_strpos($cv_en, 'type of resource') !== false) return 'rtype';
+        if (mb_strpos($cv, 'تعداد جلد') !== false || mb_strpos($cv, 'تعداد نسخه') !== false || mb_strpos($cv_en, 'copies') !== false) return 'copies';
+        if (mb_strpos($cv, 'شماره ثبت') !== false || mb_strpos($cv_en, 'reg') !== false) return 'reg_no';
+        if ($cv === 'کتابخانه' || mb_strpos($cv, 'نام کتابخانه') !== false) return 'loc';
+        // تطابق با کد/برچسب سفارشی کاربرگه (کاربر می‌تواند هر نام دلخواه بگذارد)
+        foreach ($ws_fields as $fk => $fd) {
+            $fd_code = trim((string)$fd['code']);
+            $fd_label = trim((string)$fd['label']);
+            if ($fd_code !== '' && (stripos($cv_en, strtolower(xl_norm_digits($fd_code))) !== false || stripos(strtolower(xl_norm_digits($fd_code)), $cv_en) !== false)) return $fk;
+            if ($fd_label !== '' && (mb_strpos($cv, $fd_label) !== false || mb_strpos($fd_label, $cv) !== false)) return $fk;
+        }
+        // کدهای عمومی MARC (ترتیب مهم: 010 قبل از 606/700 ... نه؛ هر الگوی عددی سه‌رقمی دقیق)
+        if (preg_match('/\b010\b/', $cv_en) || mb_strpos($cv, 'شابک') !== false || mb_strpos($cv, 'شاپا') !== false || mb_strpos($cv_en, 'isbn') !== false || mb_strpos($cv_en, 'issn') !== false) return 'f010';
+        if (preg_match('/\b101\b/', $cv_en) || mb_strpos($cv, 'زبان') !== false) return 'f101';
+        if (preg_match('/\b(205|206)\b/', $cv_en) || mb_strpos($cv, 'ویراست') !== false || mb_strpos($cv, 'مقیاس') !== false) return 'f205';
+        if (preg_match('/\b215\b/', $cv_en) || mb_strpos($cv, 'تعداد صفحات') !== false || mb_strpos($cv, 'مشخصات ظاهری') !== false || mb_strpos($cv, 'ابعاد') !== false) return 'f215';
+        if (preg_match('/\b225\b/', $cv_en) || mb_strpos($cv, 'فروست') !== false || mb_strpos($cv, 'عنوان مجموعه') !== false) return 'f225';
+        if (preg_match('/\b300\b/', $cv_en) || mb_strpos($cv, 'یادداشت') !== false || mb_strpos($cv, 'کتابنامه') !== false) return 'f300';
+        if (preg_match('/\b606\b/', $cv_en) || mb_strpos($cv, 'موضوع') !== false) return 'f606';
+        if (preg_match('/\b676\b/', $cv_en) || mb_strpos($cv, 'دیویی') !== false) return 'f676';
+        if (preg_match('/\b(680|686)\b/', $cv_en) || mb_strpos($cv, 'کنگره') !== false) return 'f686';
+        if (preg_match('/\b(700|701)\b/', $cv_en) || mb_strpos($cv, 'پدیدآوران شخصی') !== false || mb_strpos($cv, 'پدیدآور شخصی') !== false || mb_strpos($cv, 'پدیدآور') !== false || mb_strpos($cv_en, 'author') !== false) return 'f700';
+        if (preg_match('/\b710\b/', $cv_en) || mb_strpos($cv, 'سازمانی') !== false) return 'f710';
+        return null;
+    };
+
+    $scan_limit = min(count($rows), 5);
+    for ($h_r_idx = 0; $h_r_idx < $scan_limit; $h_r_idx++) {
+        $h_row = $rows[$h_r_idx];
+        list($has_label, $non_empty_cnt) = xl_header_score_row($h_row, $ws_fields);
+        if ($non_empty_cnt < 2) continue; // احتمالاً ردیف داده تک‌ستونه یا خالی است
+        $try_map = array();
         $detected = false;
         foreach ($h_row as $c_idx => $cell_val) {
-            $cv = xl_norm_text($cell_val);
-            $cv = xl_norm_digits($cv); // «۲۰۰ a» → «200 a» تا کدهای MARC فارسی هم شناسایی شوند
-            if ($cv === '') continue;
-            $cv_en = strtolower($cv);
-            $matched = null;
-            if (stripos($cv_en, '010') !== false || mb_strpos($cv, 'شابک') !== false || mb_strpos($cv, 'شاپا') !== false) $matched = 'f010';
-            elseif (stripos($cv_en, '101') !== false || mb_strpos($cv, 'زبان') !== false) $matched = 'f101';
-            elseif (stripos($cv_en, '200 $a') !== false || stripos($cv_en, '200$a') !== false || stripos($cv_en, '200 a') !== false || mb_strpos($cv, 'عنوان اصلی') !== false || $cv === 'عنوان') $matched = 'f200a';
-            elseif (stripos($cv_en, '200 $e') !== false || stripos($cv_en, '200$e') !== false || stripos($cv_en, '200 e') !== false || mb_strpos($cv, 'عنوان فرعی') !== false) $matched = 'f200e';
-            elseif (stripos($cv_en, '200 $f') !== false || stripos($cv_en, '200$f') !== false || stripos($cv_en, '200 f') !== false || mb_strpos($cv, 'نخستین پدیدآور') !== false || mb_strpos($cv, 'مسئولیت') !== false) $matched = 'f200f';
-            elseif (stripos($cv_en, '205') !== false || stripos($cv_en, '206') !== false || mb_strpos($cv, 'ویراست') !== false || mb_strpos($cv, 'مقیاس') !== false) $matched = 'f205';
-            elseif (stripos($cv_en, '210 $a') !== false || stripos($cv_en, '210$a') !== false || stripos($cv_en, '210 a') !== false || mb_strpos($cv, 'محل نشر') !== false) $matched = 'f210a';
-            elseif (stripos($cv_en, '210 $c') !== false || stripos($cv_en, '210$c') !== false || stripos($cv_en, '210 c') !== false || mb_strpos($cv, 'نام ناشر') !== false || mb_strpos($cv, 'ناشر') !== false) $matched = 'f210c';
-            elseif (stripos($cv_en, '210 $d') !== false || stripos($cv_en, '210$d') !== false || stripos($cv_en, '210 d') !== false || mb_strpos($cv, 'سال نشر') !== false) $matched = 'f210d';
-            elseif (stripos($cv_en, '215') !== false || mb_strpos($cv, 'تعداد صفحات') !== false || mb_strpos($cv, 'مشخصات ظاهری') !== false || mb_strpos($cv, 'ابعاد') !== false) $matched = 'f215';
-            elseif (stripos($cv_en, '225') !== false || mb_strpos($cv, 'فروست') !== false || mb_strpos($cv, 'عنوان مجموعه') !== false) $matched = 'f225';
-            elseif (stripos($cv_en, '300') !== false || mb_strpos($cv, 'یادداشت') !== false || mb_strpos($cv, 'کتابنامه') !== false) $matched = 'f300';
-            elseif (stripos($cv_en, '606') !== false || mb_strpos($cv, 'موضوع') !== false) $matched = 'f606';
-            elseif (stripos($cv_en, '676') !== false || mb_strpos($cv, 'دیویی') !== false) $matched = 'f676';
-            elseif (stripos($cv_en, '680') !== false || stripos($cv_en, '686') !== false || mb_strpos($cv, 'کنگره') !== false) $matched = 'f686';
-            elseif (stripos($cv_en, '700') !== false || stripos($cv_en, '701') !== false || mb_strpos($cv, 'پدیدآوران شخصی') !== false || mb_strpos($cv, 'پدیدآور شخصی') !== false) $matched = 'f700';
-            elseif (stripos($cv_en, '710') !== false || mb_strpos($cv, 'سازمانی') !== false) $matched = 'f710';
-            elseif (mb_strpos($cv, 'نوع منبع') !== false) $matched = 'rtype';
-            elseif (mb_strpos($cv, 'تعداد جلد') !== false || mb_strpos($cv, 'تعداد نسخه') !== false) $matched = 'copies';
-            elseif (mb_strpos($cv, 'شماره ثبت') !== false) $matched = 'reg_no';
-            elseif ($cv === 'کتابخانه' || mb_strpos($cv, 'نام کتابخانه') !== false) $matched = 'loc';
-            else {
-                // بررسی تطابق با برچسب یا کد سفارشی کاربرگه
-                foreach ($ws_fields as $fk => $fd) {
-                    if (($fd['code'] !== '' && stripos($cv_en, strtolower(xl_norm_digits($fd['code']))) !== false) || ($fd['label'] !== '' && mb_strpos($cv, $fd['label']) !== false)) {
-                        $matched = $fk;
-                        break;
-                    }
-                }
-            }
-            if ($matched !== null) { $header_map[$c_idx] = $matched; $detected = true; }
+            $cv = xl_norm_digits(xl_norm_text($cell_val));
+            $matched = $match_header_cell($cv);
+            if ($matched !== null) { $try_map[$c_idx] = $matched; $detected = true; }
         }
-        if ($detected) { $is_header = true; $header_row_idx = $h_r_idx; }
-        break; // فقط اولین ردیفِ نامخالی بررسی می‌شود
+        if ($detected) {
+            // اگر ردیف‌های بعدی هم همین شکل سرستون را دارند، یعنی این واقعاً سرستون است (نه داده)
+            $header_map = $try_map;
+            $is_header = true;
+            $header_row_idx = $h_r_idx;
+            break;
+        }
+        if (!$has_label && count($rows) > 1 && $h_r_idx === 0) {
+            // ردیف اول شبیه داده است؛ ردیف دوم را هم امتحان نکن اگر داده بود، حالت بدون سرستون فعال شود
+            $second = isset($rows[1]) ? xl_header_score_row($rows[1], $ws_fields) : array(false, 0);
+            if (!$second[0]) break;
+        }
     }
 
-    // اگر ردیف اول سرستون نبود، نگاشت ترتیبی بر اساس فیلدهای کاربرگه (یا استاندارد ۱۷ فیلدی)
+    // اگر هیچ ردیفی سرستون نبود، نگاشت ترتیبی بر اساس فیلدهای کاربرگه (یا استاندارد ۱۷ فیلدی)
     if (!$is_header) {
         $seq_keys = array_keys($ws_fields);
         if (count($first_row) >= 17) $seq_keys = $cols;
@@ -798,6 +1019,26 @@ function parse_excel_to_preview_records($file, $loc_name, $ws_key = 'book') {
         $header_map[$n_base]     = 'rtype';
         $header_map[$n_base + 1] = 'copies';
         $header_map[$n_base + 2] = 'reg_no';
+    } else {
+        // تکمیل هوشمند: اگر ستونی در سرستون شناسایی نشد اما داده آن ستون مشخصاً «تاریخ اکسل» یا رشته فارسی است، رها کن
+        // ولی اگر عنوان اصلی هیچ ستونی پیدا نکرد و فایل دقیقاً به ترتیب فیلدهای کاربرگه ساخته شده بود، ترتیب پیش‌فرض را اعمال کن
+        $mapped_targets = array_values($header_map);
+        $need_fallback = !in_array('f200a', $mapped_targets, true);
+        if ($need_fallback) {
+            $seq_keys = array_keys($ws_fields);
+            if (count($first_row) >= 17) $seq_keys = $cols;
+            $unmapped_cols = array();
+            foreach (array_keys($ws_fields) as $fk) if (!in_array($fk, $mapped_targets, true)) $unmapped_cols[] = $fk;
+            // اگر بیش از نیمی از فیلدهای کاربرگه در سرستون نگاشت نشده بودند، احتمالاً فایل با ترتیب پیش‌فرض ساخته شده است
+            if (count($unmapped_cols) > count($ws_fields) / 2) {
+                $header_map = array();
+                foreach ($seq_keys as $idx_k => $fk) $header_map[$idx_k] = $fk;
+                $n_base = count($seq_keys);
+                $header_map[$n_base]     = 'rtype';
+                $header_map[$n_base + 1] = 'copies';
+                $header_map[$n_base + 2] = 'reg_no';
+            }
+        }
     }
 
     $parsed = array();
